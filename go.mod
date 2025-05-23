@@ -1,4 +1,4 @@
-module golang.zx2c4.com/wintun
+module go.linka.cloud/wintun
 
 go 1.17
 
