@@ -14,6 +14,7 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.zx2c4.com/wireguard/windows/driver/memmod"
 )
 
 func newLazyDLL(name string, onLoad func(d *lazyDLL)) *lazyDLL {
@@ -43,7 +44,7 @@ func (p *lazyProc) Find() error {
 
 	err := p.dll.Load()
 	if err != nil {
-		return fmt.Errorf("Error loading %v DLL: %w", p.dll.Name, err)
+		return fmt.Errorf("Error loading wintun DLL: %w", err)
 	}
 	addr, err := p.nameToAddr()
 	if err != nil {
@@ -64,8 +65,9 @@ func (p *lazyProc) Addr() uintptr {
 
 type lazyDLL struct {
 	Name   string
+	base   windows.Handle
 	mu     sync.Mutex
-	module windows.Handle
+	module *memmod.Module
 	onLoad func(d *lazyDLL)
 }
 
@@ -75,18 +77,15 @@ func (d *lazyDLL) Load() error {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.module != 0 {
+	if d.module != nil {
 		return nil
 	}
 
-	const (
-		LOAD_LIBRARY_SEARCH_APPLICATION_DIR = 0x00000200
-		LOAD_LIBRARY_SEARCH_SYSTEM32        = 0x00000800
-	)
-	module, err := windows.LoadLibraryEx(d.Name, 0, LOAD_LIBRARY_SEARCH_APPLICATION_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32)
+	module, err := memmod.LoadLibrary(dll)
 	if err != nil {
 		return fmt.Errorf("Unable to load library: %w", err)
 	}
+	d.base = windows.Handle(module.BaseAddr())
 
 	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&d.module)), unsafe.Pointer(module))
 	if d.onLoad != nil {
@@ -96,7 +95,7 @@ func (d *lazyDLL) Load() error {
 }
 
 func (p *lazyProc) nameToAddr() (uintptr, error) {
-	return windows.GetProcAddress(p.dll.module, p.Name)
+	return p.dll.module.ProcAddressByName(p.Name)
 }
 
 // Version returns the version of the Wintun DLL.
@@ -104,11 +103,11 @@ func Version() string {
 	if modwintun.Load() != nil {
 		return "unknown"
 	}
-	resInfo, err := windows.FindResource(modwintun.module, windows.ResourceID(1), windows.RT_VERSION)
+	resInfo, err := windows.FindResource(modwintun.base, windows.ResourceID(1), windows.RT_VERSION)
 	if err != nil {
 		return "unknown"
 	}
-	data, err := windows.LoadResourceData(modwintun.module, resInfo)
+	data, err := windows.LoadResourceData(modwintun.base, resInfo)
 	if err != nil {
 		return "unknown"
 	}
